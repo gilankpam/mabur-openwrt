@@ -4,6 +4,9 @@
 # options 3 and 6): a client keeps its own Wi-Fi internet. dnsmasq serves
 # DHCP only (port=0 turns its DNS server off). OpenWrt failsafe mode still
 # comes up on 192.168.1.1 for recovery.
+# Exit status is uci's own (no trailing `exit 0`): uci-defaults deletes a
+# script that exits 0, so on a failed apply this must exit non-zero to stay
+# and be retried on the next boot.
 uci -q batch <<'EOF'
 set network.lan.ipaddr='10.83.11.1'
 set network.lan.netmask='255.255.255.0'
@@ -20,4 +23,3 @@ set dhcp.@dnsmasq[0].port='0'
 commit network
 commit dhcp
 EOF
-exit 0
