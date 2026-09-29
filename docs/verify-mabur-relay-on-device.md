@@ -86,8 +86,11 @@ Extend the probe (or loop invocations of it) to send 20 alternating
 
 ## 4. Browser Spotter smoke test
 
-Serve a one-file page from the host, over plain HTTP so it can open a plain
-`ws://` connection (a hosted HTTPS page cannot — mixed content):
+Serve a one-file page from the host over plain HTTP. This is a smoke test
+from the build host, so a local plain-HTTP page is the simplest way to open
+a `ws://` connection to the relay — the hosted HTTPS page also works, from
+Chrome 142+, after a one-time "local network access" prompt (see README item
+5 and mabur `docs/web-gs.md`, "CPE relay radio"):
 
 ```sh
 python3 -m http.server -d /tmp 8000

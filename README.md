@@ -61,7 +61,8 @@ sysupgrade image is a **fixed-layout** ~7.8 MB (tplink-safeloader), so
 removing packages frees read-only rootfs/overlay space rather than shrinking
 the `.bin`; if you add
 packages and the rootfs overflows the partition, trimming further defaults is
-the lever.
+the lever. With dnsmasq shipped (the DHCP lease, `90-mabur-lan`), the v3
+sysupgrade image measures **7,803,748 B of 7,864,320 B** (~60 KB headroom).
 
 ## Flash
 
@@ -74,6 +75,14 @@ Pick the file matching your hardware revision. From stock TP-Link: use the
 1. Connect your computer to the CPE510 (PoE LAN port) and leave its NIC on
    DHCP: the CPE is **10.83.11.1** and leases **10.83.11.100–199** with no
    gateway and no DNS, so your Wi-Fi internet keeps working.
+
+   dnsmasq refuses to serve any leases at all if it detects another DHCP
+   server already on the LAN at start (OpenWrt's `dhcp_check`), and it
+   caches that refusal until reboot. If the CPE was ever plugged into a LAN
+   with its own router/DHCP server, power-cycle it before plugging a laptop
+   in directly, or it will sit there handing out nothing. We deliberately do
+   **not** set `dhcp.lan.force`: forcing dnsmasq to serve anyway would hand
+   out gateway-less 10.83.11.x leases to every other host on such a LAN too.
 2. The `mabur-relay` service **starts at boot** and stays passive — radio up,
    nothing forwarded to anyone — until a client subscribes. There is nothing
    to enable and no key to configure.
