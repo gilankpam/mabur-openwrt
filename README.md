@@ -1,8 +1,8 @@
 # mabur RX relay firmware for TP-Link CPE510
 
-[![build](https://github.com/gilankpam/wfb-ng-openwrt/actions/workflows/build.yml/badge.svg)](https://github.com/gilankpam/wfb-ng-openwrt/actions/workflows/build.yml)
+[![build](https://github.com/gilankpam/mabur-openwrt/actions/workflows/build.yml/badge.svg)](https://github.com/gilankpam/mabur-openwrt/actions/workflows/build.yml)
 
-**[⬇ Download the latest firmware](https://github.com/gilankpam/wfb-ng-openwrt/releases/latest)** — built by CI from every push to `master` (rolling `latest` prerelease).
+**[⬇ Download the latest firmware](https://github.com/gilankpam/mabur-openwrt/releases/latest)** — built by CI from every push to `master` (rolling `latest` prerelease).
 
 Minimal OpenWrt firmware that turns a TP-Link CPE510 into a **remote receive
 card** for mabur, an RTP-free FPV video link: the CPE hears the drone's
