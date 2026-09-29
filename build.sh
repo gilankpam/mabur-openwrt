@@ -10,7 +10,7 @@ cd "$(dirname "$0")"
 
 SDK_IMAGE="wfbng-sdk:${OPENWRT_VERSION}"
 IB_IMAGE="wfbng-ib:${OPENWRT_VERSION}"
-IMG_PACKAGES="mabur-relay iw -wpad-basic-mbedtls -dnsmasq -odhcpd -ppp -ppp-mod-pppoe -firewall4 -nftables -kmod-nft-core -kmod-nft-nat -kmod-nft-offload"
+IMG_PACKAGES="mabur-relay iw -wpad-basic-mbedtls -odhcpd -ppp -ppp-mod-pppoe -firewall4 -nftables -kmod-nft-core -kmod-nft-nat -kmod-nft-offload"
 # Run as root inside the container: the OpenWrt SDK's prebuilt sysroot is owned by
 # the buildbot uid, and `cp -p` during package install needs to own those files
 # (fails as a mismatched uid, e.g. on CI runners). We chown outputs back to the
@@ -52,6 +52,8 @@ cmd_test() {
   echo "=== start/init script tests ==="
   sh "$R/tests/test_start.sh"
   sh "$R/tests/test_init.sh"
+  echo "=== LAN defaults ==="
+  sh tests/test_lan_defaults.sh
 }
 
 cmd_package() {

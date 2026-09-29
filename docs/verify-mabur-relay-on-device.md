@@ -24,7 +24,7 @@ sysupgrade -n /tmp/mabur-relay-tplink_cpe510-v2-squashfs-sysupgrade.bin
 board's hardware revision). After it reboots:
 
 ```sh
-ssh root@192.168.1.1
+ssh root@10.83.11.1
 logread | grep mabur-relay     # expect: "up: mon0 on 136 HT40-"
 ls /etc/rc.d | grep mabur-relay  # expect: S99mabur-relay
 iw dev                          # expect: mon0, type monitor
@@ -32,8 +32,8 @@ iw dev                          # expect: mon0, type monitor
 
 ## 2. Throwaway client: frame rate and relay-loss gate
 
-Run on the host wired to the CPE (host NIC on the `192.168.1.0/24` subnet,
-e.g. `192.168.1.10/24`). Save as `relayprobe.py`:
+Run on the host wired to the CPE, host NIC on DHCP (it gets a 10.83.11.x
+lease). Save as `relayprobe.py`:
 
 ```python
 #!/usr/bin/env python3
@@ -60,7 +60,7 @@ print(f'frames {n} ({n/10:.0f}/s) relay seq gaps {gaps} ({100*gaps/max(n+gaps,1)
 With the drone flying (or benched and transmitting) on channel 136 HT40−:
 
 ```sh
-python3 relayprobe.py 192.168.1.1 136 2
+python3 relayprobe.py 10.83.11.1 136 2
 ```
 
 While it runs, on the CPE:
@@ -94,7 +94,7 @@ python3 -m http.server -d /tmp 8000
 ```
 
 The page:
-- opens `new WebSocket('ws://192.168.1.1:8311')` with `binaryType =
+- opens `new WebSocket('ws://10.83.11.1:8311')` with `binaryType =
   'arraybuffer'`;
 - sends the `HELLO` message every 500 ms;
 - prints incoming `STATUS` messages and a rolling frames/s count from `FRAME`
@@ -117,7 +117,7 @@ Bench run: the relay binary was run by hand from `/tmp` on the CPE's old
 (wfb-ng) image; the `sysupgrade` + boot/procd path (step 1 above) was not
 exercised.
 
-**Setup:** CPE510 v3 on current wfb-ng firmware; mabur-relay cross-built from feat/mabur-relay 83cafad with 25.12.4 SDK toolchain (-Os, 31 KB); mon0 created by hand with `flags fcsfail otherbss`; channel 136 HT40−, drone in low-rate mode at ~110 frames/s. Host on CPE's LAN via USB NIC (192.168.1.101).
+**Setup:** CPE510 v3 on current wfb-ng firmware; mabur-relay cross-built from feat/mabur-relay 83cafad with 25.12.4 SDK toolchain (-Os, 31 KB); mon0 created by hand with `flags fcsfail otherbss`; channel 136 HT40−, drone in low-rate mode at ~110 frames/s. Host on CPE's LAN via USB NIC (192.168.1.101) (pre-2026-09-29 address).
 
 **Frames (30 s window):** relay 3228 frames (108/s), relay seq gaps 0 (0.000%), ch0 timestamps 0; GS Realtek cards over same window: c0 2742, c1 2670 → relay >= Realtek cards (gate: within 5%) **PASS**.
 
@@ -210,13 +210,13 @@ run: drone low-power disabled (restored after), link 136 HT40- at mcs4/40,
 Protocol v3 (`docs/mabur-relay-protocol.md`) adds `TX` (type 5, client →
 relay) and three `STATUS` counters (`tx`, `tx_fail`, `tx_refused`). CPE
 flashed from relay `master` `44f0190`. Setup: CPE on host USB-Ethernet
-(192.168.1.101 ↔ 192.168.1.1); drone `.152` on ch136 HT40-; relay run with
+(192.168.1.101 ↔ 192.168.1.1) (pre-2026-09-29 address); drone `.152` on ch136 HT40-; relay run with
 `-v` via the `RELAY_BIN` wrapper for the counters.
 
 ### Step 1 — TX alone
 
-Native `webgs live --relay 192.168.1.1:8310 --mode gs --ch 136 --w 40 --secs
-60`, no other GS on air, drone `low_power` ON.
+Native `webgs live --relay 192.168.1.1:8310 --mode gs --ch 136 --w 40 --secs 60`
+(pre-2026-09-29 address), no other GS on air, drone `low_power` ON.
 
 - SESSION + `peer_acked` in the first second; ladder climbed to rung 4
   (mcs4/40) by ~15 s.

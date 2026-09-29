@@ -1,7 +1,7 @@
 # Verify ath9k TX-power uncap on the CPE510
 
 Acceptance gate for the TX-power uncap (patch `998-ath9k-txpower-uncap` + the wfb-ng launcher
-fix). Run on the bench unit (`root@192.168.1.1`). The build host cannot prove RF behaviour, so
+fix). Run on the bench unit (`root@10.83.11.1`). The build host cannot prove RF behaviour, so
 an operator runs this against real hardware.
 
 > **Firmware note (2026-09-29):** this image no longer ships wfb-ng —

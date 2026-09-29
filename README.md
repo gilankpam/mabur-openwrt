@@ -71,8 +71,9 @@ Pick the file matching your hardware revision. From stock TP-Link: use the
 
 ## Configure & run
 
-1. Set your computer's NIC to a static **192.168.1.x/24** and connect it to
-   the CPE510 (PoE LAN port). The device is **192.168.1.1**, no DHCP.
+1. Connect your computer to the CPE510 (PoE LAN port) and leave its NIC on
+   DHCP: the CPE is **10.83.11.1** and leases **10.83.11.100–199** with no
+   gateway and no DNS, so your Wi-Fi internet keeps working.
 2. The `mabur-relay` service **starts at boot** and stays passive — radio up,
    nothing forwarded to anyone — until a client subscribes. There is nothing
    to enable and no key to configure.
@@ -93,10 +94,11 @@ Pick the file matching your hardware revision. From stock TP-Link: use the
 4. Ports: **UDP 8310** for `maburgs`, **`ws://` 8311** for the web GS Spotter.
    Whichever subscriber owns the tune (the longest-lived UDP client, else the
    oldest WebSocket client, else none) steers the radio with `TUNE` messages.
-5. Web GS note: a page served from `http://127.0.0.1` (e.g. `web/serve.py`)
-   may open `ws://192.168.1.1:8311`. The hosted HTTPS page may **not** — a
-   browser blocks a plain `ws://` connection from an HTTPS page as mixed
-   content — so phones need TLS, which this relay does not build.
+5. Web GS: the hosted page (<https://gilankpam.github.io/mabur/>) connects to
+   `ws://10.83.11.1:8311` by itself — Chrome 142+ lets an https page reach a
+   private IP after a one-time "local network access" prompt. Firefox needs
+   the local page (`python3 web/serve.py 8808` in the mabur repo). See mabur
+   `docs/web-gs.md`, "CPE relay radio".
 
 See `docs/mabur-relay-protocol.md` for the wire protocol contract and
 `docs/verify-mabur-relay-on-device.md` for the on-device acceptance runbook.
@@ -132,7 +134,7 @@ computes EVM differently and isn't subject to this limit.)
 ## On-device smoke test
 
 ```sh
-ssh root@192.168.1.1
+ssh root@10.83.11.1
 logread | grep mabur-relay   # e.g. "up: mon0 on 136 HT40-"
 iw dev                       # mon0 present, type monitor
 ```
@@ -140,7 +142,7 @@ iw dev                       # mon0 present, type monitor
 From the host wired to the CPE:
 
 ```sh
-python3 relayprobe.py 192.168.1.1
+python3 relayprobe.py 10.83.11.1
 ```
 
 (`relayprobe.py` is the throwaway client in

@@ -1,0 +1,23 @@
+#!/bin/sh
+# mabur CPE: LAN on an uncommon subnet with a DHCP pool, so a laptop/phone
+# plugs in with no IP setup. The lease carries NO router and NO DNS (empty
+# options 3 and 6): a client keeps its own Wi-Fi internet. dnsmasq serves
+# DHCP only (port=0 turns its DNS server off). OpenWrt failsafe mode still
+# comes up on 192.168.1.1 for recovery.
+uci -q batch <<'EOF'
+set network.lan.ipaddr='10.83.11.1'
+set network.lan.netmask='255.255.255.0'
+set dhcp.lan=dhcp
+set dhcp.lan.interface='lan'
+set dhcp.lan.start='100'
+set dhcp.lan.limit='100'
+set dhcp.lan.leasetime='12h'
+delete dhcp.lan.ignore
+delete dhcp.lan.dhcp_option
+add_list dhcp.lan.dhcp_option='3'
+add_list dhcp.lan.dhcp_option='6'
+set dhcp.@dnsmasq[0].port='0'
+commit network
+commit dhcp
+EOF
+exit 0
