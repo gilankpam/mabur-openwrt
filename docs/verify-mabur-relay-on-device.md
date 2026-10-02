@@ -259,3 +259,40 @@ browser in the session. The native CLI uses the same `RelayLink`/
 `RelayClient` over UDP. WS-mode full-rate CPE load was 71 % RX-only
 (earlier run, above); not re-measured with TX.
 
+
+## Full 5 GHz grid + XM regdomain — bench 2026-10-03 (CPE v3, branch `full-5ghz-chantable` 2c1c51f)
+
+Flashed with `sysupgrade -n` (v3 image 7,803,748 B); kmods `-r5`,
+`/lib/firmware/regulatory.db` 6408 B, `REG=XM` from the shipped conf.
+Throwaway client: a 60-line Python UDP client (HELLO → TUNE → listen →
+TX), not committed.
+
+- `iw reg get`: global `XM (5150-5925 @ 40), 30 dBm`; the `phy#0` block still
+  prints `US` — that is ath9k's own boot-time `regulatory_hint(US)` copy
+  (`ath9k/init.c`, EEPROM 0x0 → US), which cfg80211 keeps as `wiphy->regd`
+  but does not use for a user hint. The channel flags are the truth:
+  `iw phy phy0 channels` lists all 36 channels **36–177** at 25 dBm with no
+  `Radar` / `No IR` / `disabled` (under US: Radar 52–144, No IR 169–177,
+  68–96 absent). **PASS**
+- TUNE 144 HT40- (centre 5710), 177 HT20, 169 HT40+, 68, 96: all `state=0`,
+  `iw dev mon0 info` readback matches. **PASS**
+- TX inject, 20 frames each on 177, 68, 144, 136 (`-v` on the daemon for the
+  `txecho` line): `tx` 12/13/12/20, `tx_fail 0`, `tx_refused 0`, and
+  **`txecho = 2 × tx` on every channel** (one `PACKET_OUTGOING` copy + one
+  mac80211 TX-status report per frame = the driver transmitted it; a NO-IR
+  refusal would leave one echo). **PASS**
+- Drone leg, **144 HT40-** (drone `.152` + Radxa GS both on 144, boot scan
+  off, full ladder): GS `ausniff` 20 s = 1215 AUs, 609/606 complete, 1
+  frame_id gap (restart window), 60.8 fps; relay heard **49,201 good /
+  6 bad-FCS frames in 15 s** (mcs4, RSSI −62…−38, `seq_gaps` 0). **PASS**
+- Drone leg, **177 HT20** (both ends 177/20, GS ladder trimmed to its 20 MHz
+  rungs): GS `ausniff` 20 s = 1216 AUs, 608/608, 0 gaps, 60.8 fps at
+  mcs1/20; relay heard **12,040 good / 7 bad-FCS in 15 s** (mcs1, RSSI
+  −59…−37, 0 gaps). **PASS** — a channel the US domain would have made
+  receive-only.
+- Not exercised: the relay as a `maburgs` card on 144/177 (the Radxa had no
+  route to the CPE — the USB-Ethernet adapter was on the build host and the
+  host had no RTL8822E for a host `maburgs`); TX power accuracy above the
+  last cal pier (5825).
+- Restored after: GS/drone configs back to 136 HT40- (backups
+  `*.pre-ch144` left on both), relay `-v` removed, relay on 136 HT40-.
