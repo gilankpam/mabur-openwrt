@@ -54,6 +54,8 @@ cmd_test() {
   sh "$R/tests/test_init.sh"
   echo "=== LAN defaults ==="
   sh tests/test_lan_defaults.sh
+  echo "=== regdb (XM domain) ==="
+  sh tests/test_regdb.sh
 }
 
 cmd_package() {
@@ -69,6 +71,8 @@ cmd_image() {
   rm -rf build/overlay && mkdir -p build/overlay/etc
   if [ -d files ]; then cp -a files/. build/overlay/; fi
   rm -f build/overlay/.gitkeep
+  # Our regulatory.db (stock + XM) replaces wireless-regdb's file in the rootfs.
+  sh regdb/build-regdb.sh build/overlay
   mkdir -p output
   "${DOCKER_RUN[@]}" \
     -e PROFILES="$CPE510_PROFILES" -e PACKAGES="$IMG_PACKAGES" \

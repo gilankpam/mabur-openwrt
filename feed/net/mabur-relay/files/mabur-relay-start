@@ -6,7 +6,7 @@ RELAY_CONF="${RELAY_CONF:-/etc/mabur-relay.conf}"
 RELAY_STATE="${RELAY_STATE:-/tmp/mabur-relay.state}"
 RELAY_BIN="${RELAY_BIN:-/usr/sbin/mabur-relay}"
 
-PHY=phy0; MON=mon0; REG=US; TXPOWER=""
+PHY=phy0; MON=mon0; REG=XM; TXPOWER=""
 BOOT_CHANNEL=136; BOOT_SEC=HT40-; UDP_PORT=8310; WS_PORT=8311
 [ -f "$RELAY_CONF" ] && . "$RELAY_CONF"
 

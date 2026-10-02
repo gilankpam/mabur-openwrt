@@ -26,11 +26,12 @@ cp -v "$PKG" /work/build/packages/
 MAC_SRC=feeds/base/kernel/mac80211
 MAC_PKG=package/kernel/mac80211
 if [ ! -d "$MAC_PKG" ]; then cp -a "$MAC_SRC" "$MAC_PKG"; fi
-# Apply all local mac80211 patches (radiotap antnoise + txpower uncap) and bump the
-# release so every emitted kmod outranks stock and the ImageBuilder selects ours.
+# Apply all local mac80211 patches (radiotap antnoise, txpower uncap, full 5 GHz
+# chantable) and bump the release so every emitted kmod outranks stock and the
+# ImageBuilder selects ours (r5 = chantable build; r4 was the 3-patch set).
 if ls /work/patches/mac80211/*.patch >/dev/null 2>&1; then
   cp /work/patches/mac80211/*.patch "$MAC_PKG/patches/subsys/"
-  sed -i 's/^PKG_RELEASE:=.*/PKG_RELEASE:=4/' "$MAC_PKG/Makefile"
+  sed -i 's/^PKG_RELEASE:=.*/PKG_RELEASE:=5/' "$MAC_PKG/Makefile"
 fi
 grep -q '^CONFIG_PACKAGE_kmod-ath9k=y' .config 2>/dev/null || echo 'CONFIG_PACKAGE_kmod-ath9k=y' >> .config
 make defconfig

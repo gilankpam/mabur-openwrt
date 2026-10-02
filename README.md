@@ -16,8 +16,9 @@ or decrypt logic lives on the device; that stays in mabur's receivers.
 - OpenWrt **25.12** (`ath79/generic`), CPE510 **v1/v2/v3**.
 - Ships the in-tree `mabur-relay` daemon (single-threaded C, no library
   dependencies beyond libc) as a procd service that starts at boot and stays
-  passive until a client subscribes, plus the three ath9k kmod patches (SNR
-  antnoise, EVM lock-quality, TX-power uncap).
+  passive until a client subscribes, plus four ath9k kmod patches (SNR
+  antnoise, EVM lock-quality, TX-power uncap, full 5 GHz channel grid) and a
+  regulatory database with an all-5-GHz `XM` domain (see "Channels").
 - Design + plan: `docs/superpowers/specs/` and `docs/superpowers/plans/`
   (gitignored, dev-machine only); the committed protocol contract is
   `docs/mabur-relay-protocol.md`.
@@ -92,7 +93,7 @@ Pick the file matching your hardware revision. From stock TP-Link: use the
    ```
    PHY=phy0            # radio phy
    MON=mon0            # monitor vif the relay listens on
-   REG=US              # regulatory domain (your legal responsibility)
+   REG=XM              # regulatory domain: XM = every 5 GHz channel the AR9344 tunes (36-177, no DFS/NO-IR); US etc. = that country's limits. Your legal responsibility.
    TXPOWER=            # phy TX power in mBm (e.g. 2000 = 20 dBm); empty = driver default
    BOOT_CHANNEL=136    # channel until a client tunes (a respawn uses the last tuned one)
    BOOT_SEC=HT40-      # HT20 | HT40+ | HT40-
@@ -111,6 +112,31 @@ Pick the file matching your hardware revision. From stock TP-Link: use the
 
 See `docs/mabur-relay-protocol.md` for the wire protocol contract and
 `docs/verify-mabur-relay-on-device.md` for the on-device acceptance runbook.
+
+## Channels and regulatory domain
+
+Stock ath9k lists only 36-140 and 149-165: its static 5 GHz channel table
+predates channel 144 and was never extended, so a `TUNE` to 144 (or 169-177)
+fails in `iw` whatever the regdomain says. Patch
+`997-ath9k-full-5ghz-chantable` fills in the whole 20 MHz grid **36-177**
+(adds 68-96, 144, 169, 173, 177; the AR9344 synthesizer tunes all of it, cal
+data past 5825 MHz is the last pier's).
+
+Which of those channels may be *used* is then purely the kernel regdb's call
+(`iw reg set $REG`; the ath driver is built with `ATH_USER_REGD`, so the
+EEPROM region is ignored). The image ships `regdb/db.txt` = stock
+wireless-regdb 2026.05.30 plus one extra domain:
+
+- **`XM`** (shipped default): one rule `5150-5925 MHz @ 40, 30 dBm`, no DFS,
+  no NO-IR. Every channel in the table is tunable and injectable.
+- **`US`, `DE`, ...**: the real rules. Note that NO-IR (e.g. US 5850-5895,
+  channels 169-177) lets the relay *receive* but makes mac80211 refuse its
+  TX injection, so the RCF uplink silently dies there; DFS alone is fine for
+  a monitor vif.
+
+`regdb/build-regdb.sh` compiles the db at image time (`tests/test_regdb.sh`
+checks the `XM` rule). Using channels your jurisdiction does not allow is
+your responsibility.
 
 ## Radio metrics: SNR and EVM
 

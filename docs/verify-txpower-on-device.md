@@ -18,7 +18,7 @@ an operator runs this against real hardware.
 Flash `output/<rev>/...-cpe510-v3-...-sysupgrade.bin` (sysupgrade or TFTP recovery). Then:
 
 - `dmesg | grep -i ath9k` — no vermagic / module-load errors.
-- Confirm OUR build loaded: `kmod-ath9k` / `kmod-mac80211` are at **`-r4`**
+- Confirm OUR build loaded: `kmod-ath9k` / `kmod-mac80211` are at **`-r5`**
   (`apk list --installed 2>/dev/null | grep -E 'kmod-(ath9k|mac80211)'`, or check the image
   manifest). A stock `-r1` module mixed in re-clamps power.
 
@@ -95,7 +95,7 @@ power. If an SDR / RF power meter is available, measure conducted power at the S
 
 ## If it fails
 
-- §2 still 25: confirm the loaded `kmod-ath9k`/`kmod-mac80211` are `-r4` (a stock module mixed in
+- §2 still 25: confirm the loaded `kmod-ath9k`/`kmod-mac80211` are `-r5` (a stock module mixed in
   re-clamps); confirm the monitor vif is up and you used `iw phy`, not `iw dev mon0`.
 - §3 default drifted above calibrated: the ar9003 gate fired at default — the calibrated max and
   the requested limit differ by a half-dB rounding step. Widen the gate to

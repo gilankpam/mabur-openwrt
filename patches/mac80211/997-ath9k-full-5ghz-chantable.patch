@@ -1,0 +1,102 @@
+ath9k: full 5 GHz channel grid 36-177 (adds 68-96, 144, 169-177)
+
+ath9k_5ghz_chantable predates channel 144 and was never extended, so an
+AR9344 lists 36-140 and 149-165 and nothing else, whatever the regdb
+allows (US already permits 5470-5730 and 5850-5895). Nothing in the
+driver limits the frequency: ar9003_hw_set_channel takes any synth
+centre >= 4800 MHz, the EEPROM encodes piers as 4800 + 5n, and the
+target-power interpolation clamps past the last pier (5825 on the
+CPE510). This adds every 20 MHz-spaced channel from 36 to 177 -- the
+5340-5480 gap (68-96), 144 (5720) and 169/173/177 (5845-5885) -- so the
+mabur relay can follow its peers anywhere in [36, 177]. hw_value is an
+index into ah->channels[], so the 5 GHz entries are renumbered and
+ATH9K_NUM_CHANNELS grows 38 -> 50 (14 x 2 GHz + 36 x 5 GHz). Which
+channels may be used stays the regdb's call (regdb/db.txt, iw reg set).
+mabur-openwrt CPE510 (AR9344) firmware.
+
+--- a/drivers/net/wireless/ath/ath9k/hw.h
++++ b/drivers/net/wireless/ath/ath9k/hw.h
+@@ -73,7 +73,7 @@
+ 
+ #define ATH9K_RSSI_BAD			-128
+ 
+-#define ATH9K_NUM_CHANNELS	38
++#define ATH9K_NUM_CHANNELS	50
+ 
+ /* Register read/write primitives */
+ #define REG_WRITE(_ah, _reg, _val) \
+--- a/drivers/net/wireless/ath/ath9k/common-init.c
++++ b/drivers/net/wireless/ath/ath9k/common-init.c
+@@ -58,36 +58,54 @@
+  * on 5 MHz steps, we support the channels which we know
+  * we have calibration data for all cards though to make
+  * this static */
+ static const struct ieee80211_channel ath9k_5ghz_chantable[] = {
++	/* The full 20 MHz grid 36..177 (5180..5885 MHz). The ar9003 synthesizer
++	 * tunes anything >= 4800 MHz and the EEPROM cal piers interpolate (and
++	 * clamp past 5825), so only the regulatory snapshot this table was typed
++	 * from kept 68-96, 144 and 169-177 off it. Which of them may be used is
++	 * the regdb's business (iw reg set). */
+ 	/* _We_ call this UNII 1 */
+ 	CHAN5G(5180, 14), /* Channel 36 */
+ 	CHAN5G(5200, 15), /* Channel 40 */
+ 	CHAN5G(5220, 16), /* Channel 44 */
+ 	CHAN5G(5240, 17), /* Channel 48 */
+ 	/* _We_ call this UNII 2 */
+ 	CHAN5G(5260, 18), /* Channel 52 */
+ 	CHAN5G(5280, 19), /* Channel 56 */
+ 	CHAN5G(5300, 20), /* Channel 60 */
+ 	CHAN5G(5320, 21), /* Channel 64 */
+-	/* _We_ call this "Middle band" */
+-	CHAN5G(5500, 22), /* Channel 100 */
+-	CHAN5G(5520, 23), /* Channel 104 */
+-	CHAN5G(5540, 24), /* Channel 108 */
+-	CHAN5G(5560, 25), /* Channel 112 */
+-	CHAN5G(5580, 26), /* Channel 116 */
+-	CHAN5G(5600, 27), /* Channel 120 */
+-	CHAN5G(5620, 28), /* Channel 124 */
+-	CHAN5G(5640, 29), /* Channel 128 */
+-	CHAN5G(5660, 30), /* Channel 132 */
+-	CHAN5G(5680, 31), /* Channel 136 */
+-	CHAN5G(5700, 32), /* Channel 140 */
+-	/* _We_ call this UNII 3 */
+-	CHAN5G(5745, 33), /* Channel 149 */
+-	CHAN5G(5765, 34), /* Channel 153 */
+-	CHAN5G(5785, 35), /* Channel 157 */
+-	CHAN5G(5805, 36), /* Channel 161 */
+-	CHAN5G(5825, 37), /* Channel 165 */
++	/* 5340-5480: between UNII 2 and UNII 2e, no regdomain opens it */
++	CHAN5G(5340, 22), /* Channel 68 */
++	CHAN5G(5360, 23), /* Channel 72 */
++	CHAN5G(5380, 24), /* Channel 76 */
++	CHAN5G(5400, 25), /* Channel 80 */
++	CHAN5G(5420, 26), /* Channel 84 */
++	CHAN5G(5440, 27), /* Channel 88 */
++	CHAN5G(5460, 28), /* Channel 92 */
++	CHAN5G(5480, 29), /* Channel 96 */
++	/* _We_ call this "Middle band" (UNII 2e, through 144) */
++	CHAN5G(5500, 30), /* Channel 100 */
++	CHAN5G(5520, 31), /* Channel 104 */
++	CHAN5G(5540, 32), /* Channel 108 */
++	CHAN5G(5560, 33), /* Channel 112 */
++	CHAN5G(5580, 34), /* Channel 116 */
++	CHAN5G(5600, 35), /* Channel 120 */
++	CHAN5G(5620, 36), /* Channel 124 */
++	CHAN5G(5640, 37), /* Channel 128 */
++	CHAN5G(5660, 38), /* Channel 132 */
++	CHAN5G(5680, 39), /* Channel 136 */
++	CHAN5G(5700, 40), /* Channel 140 */
++	CHAN5G(5720, 41), /* Channel 144 */
++	/* _We_ call this UNII 3 (through 177 / 5885 MHz) */
++	CHAN5G(5745, 42), /* Channel 149 */
++	CHAN5G(5765, 43), /* Channel 153 */
++	CHAN5G(5785, 44), /* Channel 157 */
++	CHAN5G(5805, 45), /* Channel 161 */
++	CHAN5G(5825, 46), /* Channel 165 */
++	CHAN5G(5845, 47), /* Channel 169 */
++	CHAN5G(5865, 48), /* Channel 173 */
++	CHAN5G(5885, 49), /* Channel 177 */
+ };
+ 
+ /* Atheros hardware rate code addition for short preamble */
+ #define SHPCHECK(__hw_rate, __flags) \

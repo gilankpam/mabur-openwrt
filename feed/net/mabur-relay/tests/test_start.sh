@@ -61,5 +61,11 @@ printf '#!/bin/sh\necho "iw $*" >> "%s"\nexit 0\n' "$LOG" > "$BIN/iw"; chmod +x 
 echo "banana" > "$TMP/state"; run
 assert "iw dev mon0 set channel 136 HT40-" "garbage state ignored"
 
+# No REG= in the conf (or no conf at all) -> the shipped default is the mabur
+# XM domain from regdb/db.txt (whole 5 GHz span, no NO-IR), not US.
+sed -i '/^REG=/d' "$TMP/conf"; rm -f "$TMP/state"; run
+assert "iw reg set XM" "default reg domain is XM when conf has no REG"
+refute "iw reg set US" "US is not the fallback"
+
 rm -rf "$TMP"
 [ "$fail" -eq 0 ] && echo "ALL PASS" || { echo "FAILURES"; exit 1; }

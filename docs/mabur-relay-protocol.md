@@ -157,7 +157,8 @@ the CPE where the link was).
 1. Owner sends a valid `TUNE` (channel in the 5 GHz range 36–177, `sec` ∈
    {0,1,2}); invalid → `state=2`, nothing spawned. A channel the phy or
    regdomain disallows is left to `iw` to reject, which surfaces as `state=2`
-   in step 4.
+   in step 4. With the shipped kmods + `REG=XM` the phy lists the whole
+   20 MHz grid 36–177, so only off-grid numbers (e.g. 66, 146) get there.
 2. Set `rx_channel = 0`, broadcast `state=1`, fork/exec
    `iw dev mon0 set channel <ch> <HT20|HT40+|HT40->`.
 3. Frames keep flowing, stamped `rx_channel = 0`.
