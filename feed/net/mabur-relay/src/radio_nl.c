@@ -104,8 +104,11 @@ const struct radio_ops *radio_open(const char *mon) {
   if (f) { if (fscanf(f, "%31s", phy) != 1) snprintf(phy, sizeof phy, "phy0"); fclose(f); }
   snprintf(N.phyerr_path, sizeof N.phyerr_path, "/sys/kernel/debug/ieee80211/%s/ath9k/phy_err", phy);
   N.sk = nl_socket_alloc();
-  if (!N.sk || genl_connect(N.sk) < 0) return NULL;
-  N.fam = genl_ctrl_resolve(N.sk, "nl80211");
-  if (N.fam < 0) return NULL;
+  if (!N.sk) return NULL;
+  if (genl_connect(N.sk) < 0 || (N.fam = genl_ctrl_resolve(N.sk, "nl80211")) < 0) {
+    nl_socket_free(N.sk);   /* no leaked socket on a failed open */
+    N.sk = NULL;
+    return NULL;
+  }
   return &OPS;
 }
