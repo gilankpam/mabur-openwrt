@@ -19,6 +19,8 @@
 #include <linux/if_ether.h>
 #include <linux/if_packet.h>
 #include "filter.h"
+#include "radio.h"
+#include "sweep.h"
 #include "tune.h"
 #include "txrt.h"
 #include "wire.h"
@@ -68,7 +70,11 @@ static struct {
   struct owner owner;
   uint32_t seq, rx, fwd, foreign, bad_fcs, malformed, bad_msg, refused, rxdrop;
   uint32_t tx, tx_fail, tx_refused, tx_echo;
-  uint32_t tx_scan_drop;   /* owner TX dropped because a sweep is running (always 0 until Task 4) */
+  uint32_t tx_scan_drop;   /* owner TX dropped because a sweep is running */
+  struct radio_ops ops; int have_radio;
+  struct sweep sw; int sw_kind, sw_idx;      /* requester of the running sweep */
+  uint16_t gen; int sv_ok; struct survey_sample sv_base; uint32_t sv_err_base, sv_foreign_base;
+  uint64_t last_survey_ms;
   uint64_t start_ms;
 } R;
 
@@ -154,6 +160,7 @@ static void write_state(void) {
 }
 
 static void finish_tune(int exit_ok);
+static void survey_rebase(void);
 
 static void start_tune(struct mr_tune t) {
   R.tn.busy = 1; R.tn.cur = t; R.tn.started_ms = now_ms();
@@ -171,6 +178,7 @@ static void finish_tune(int exit_ok) {
   R.tn.state = ok ? 0 : 2;
   R.tn.last_id = R.tn.cur.tune_id;
   R.tn.busy = 0; R.tn.pid = 0;
+  survey_rebase();
   if (ok) write_state();
   syslog(ok ? LOG_INFO : LOG_WARNING, "retune id=%u %s, radio on %u %s", R.tn.cur.tune_id,
          ok ? "done" : "FAILED", (unsigned)R.tn.channel, tune_sec_str(R.tn.sec));
@@ -209,8 +217,98 @@ static void handle_tune(int kind, int idx, const struct mr_tune *t) {
     fill_status(&s, kind, idx); s.state = 2; s.tune_id = t->tune_id;
     reply_to(kind, idx, &s); return;
   }
-  if (R.tn.busy) { R.tn.pending = *t; R.tn.have_pending = 1; return; }
+  if (R.tn.busy || R.sw.active) { R.tn.pending = *t; R.tn.have_pending = 1; return; }
   start_tune(*t);
+}
+
+/* ---------- SURVEY feed + SCAN sweep (v4) ---------- */
+
+#define SURVEY_MS 50
+
+static int ws_enqueue(int, const uint8_t *, size_t, const uint8_t *, size_t, int);
+static void ws_flush(int);
+
+static uint32_t relay_foreign(void *c) { (void)c; return R.foreign; }
+
+static int any_subscriber(void) {
+  for (int i = 0; i < MAX_UDP; i++) if (R.udp[i].used) return 1;
+  for (int i = 0; i < MAX_WS; i++) if (R.ws[i].used && R.ws[i].upgraded) return 1;
+  return 0;
+}
+
+/* A new SURVEY generation: counters restart from a baseline read now. Called
+ * at startup, after every retune (ath9k resets the channel's survey counters
+ * when it tunes onto it) and when a sweep returns. */
+static void survey_rebase(void) {
+  R.gen++;
+  R.sv_ok = R.have_radio && R.ops.survey(R.ops.ctx, R.tn.channel, &R.sv_base) == 0 &&
+            R.ops.phyerr(R.ops.ctx, &R.sv_err_base) == 0;
+  R.sv_foreign_base = R.foreign;
+}
+
+static void ws_send_msg(int i, const uint8_t *b, size_t n) {
+  if (ws_enqueue(i, b, n, NULL, 0, 0) == 0) ws_flush(i);
+}
+
+static void survey_tick(void) {
+  uint64_t t = now_ms();
+  if (t - R.last_survey_ms < SURVEY_MS) return;
+  R.last_survey_ms = t;
+  if (!R.sv_ok || R.tn.busy || R.sw.active || !any_subscriber()) return;
+  struct survey_sample cur; uint32_t err;
+  if (R.ops.survey(R.ops.ctx, R.tn.channel, &cur) != 0 || R.ops.phyerr(R.ops.ctx, &err) != 0) return;
+  struct mr_survey s = {R.tn.channel, R.tn.sec, R.gen,
+                        cur.active_ms - R.sv_base.active_ms, cur.busy_ms - R.sv_base.busy_ms,
+                        cur.rx_ms - R.sv_base.rx_ms, cur.tx_ms - R.sv_base.tx_ms,
+                        err - R.sv_err_base, R.foreign - R.sv_foreign_base};
+  uint8_t b[MR_SURVEY_LEN];
+  mr_pack_survey(b, &s);
+  for (int i = 0; i < MAX_UDP; i++)
+    if (R.udp[i].used)
+      sendto(R.udp_fd, b, sizeof b, MSG_DONTWAIT, (struct sockaddr *)&R.udp[i].addr, sizeof R.udp[i].addr);
+  for (int i = 0; i < MAX_WS; i++)
+    if (R.ws[i].used && R.ws[i].upgraded) ws_send_msg(i, b, sizeof b);
+}
+
+static void send_scan_result(int kind, int idx, const struct mr_scan_result_hdr *h,
+                             const struct mr_scan_entry *e) {
+  static uint8_t b[MR_SCAN_RESULT_HDR_LEN + MR_SCAN_MAX_ENTRIES * MR_SCAN_ENTRY_LEN];
+  size_t n = mr_pack_scan_result(b, h, e);
+  if (kind == 1) {
+    if (idx < 0 || idx >= MAX_UDP || !R.udp[idx].used) return;   /* requester gone: drop */
+    sendto(R.udp_fd, b, n, MSG_DONTWAIT, (struct sockaddr *)&R.udp[idx].addr, sizeof R.udp[idx].addr);
+  } else if (kind == 2) {
+    if (idx < 0 || idx >= MAX_WS || !R.ws[idx].used || !R.ws[idx].upgraded) return;
+    ws_send_msg(idx, b, n);
+  }
+}
+
+static void scan_refuse(int kind, int idx, uint16_t scan_id, uint8_t status) {
+  struct mr_scan_result_hdr h = {scan_id, status, R.tn.channel, R.tn.sec, 0};
+  send_scan_result(kind, idx, &h, NULL);
+}
+
+static void handle_scan(int kind, int idx, const uint8_t *b, size_t n) {
+  update_owner();
+  struct mr_scan req;
+  uint16_t sid = n >= 6 ? (uint16_t)(b[4] | (b[5] << 8)) : 0;
+  if (mr_parse_scan(b, n, &req) != MR_OK) { scan_refuse(kind, idx, sid, MR_SCAN_INVALID); return; }
+  if (R.owner.kind != kind || R.owner.idx != idx) { scan_refuse(kind, idx, sid, MR_SCAN_NOT_OWNER); return; }
+  if (R.tn.busy || R.sw.active) { scan_refuse(kind, idx, sid, MR_SCAN_BUSY); return; }
+  if (!R.have_radio) { scan_refuse(kind, idx, sid, MR_SCAN_INVALID); return; }
+  R.sw_kind = kind; R.sw_idx = idx;
+  syslog(LOG_INFO, "sweep id=%u: %u ch x %u passes, %u ms", sid, req.n, req.passes, req.observe_ms);
+  sweep_start(&R.sw, &req, R.tn.channel, R.tn.sec, &R.ops);
+}
+
+static void finish_sweep(void) {
+  struct mr_scan_result_hdr h = {R.sw.req.scan_id, R.sw.status, R.tn.channel, R.tn.sec, (uint8_t)R.sw.count};
+  send_scan_result(R.sw_kind, R.sw_idx, &h, R.sw.out);
+  syslog(R.sw.status == MR_SCAN_OK ? LOG_INFO : LOG_WARNING,
+         "sweep id=%u done in %u ms (max retune %u ms)%s", R.sw.req.scan_id, R.sw.total_ms,
+         R.sw.max_retune_ms, R.sw.status == MR_SCAN_OK ? "" : ", could NOT return");
+  survey_rebase();
+  if (R.tn.have_pending) { R.tn.have_pending = 0; start_tune(R.tn.pending); }
 }
 
 /* ---------- RX ---------- */
@@ -238,7 +336,9 @@ static void batch_append(int *nb, const uint8_t *pkt, size_t len, const struct r
   if (ri->has_fcs && dl >= 28) dl -= 4;
   const uint8_t *d = pkt + ri->rt_len;
   uint8_t base_flags = (uint8_t)((ri->bad_fcs ? MR_FLAG_BADFCS : 0) | ri->phy_flags);
-  struct mr_frame_meta fm = {R.seq++, (uint8_t)(R.tn.busy ? 0 : R.tn.channel), R.tn.sec,
+  uint8_t rx_ch = R.sw.active ? sweep_channel(&R.sw) : (uint8_t)(R.tn.busy ? 0 : R.tn.channel);
+  uint8_t rx_sec = R.sw.active ? 0 : R.tn.sec;
+  struct mr_frame_meta fm = {R.seq++, rx_ch, rx_sec,
                              base_flags, ri->mcs,
                              {ri->rssi[0], ri->rssi[1]}, {ri->noise[0], ri->noise[1]}, ri->tsf_lo};
   mr_pack_frame_hdr(batch[i].hdr, &fm);
@@ -288,6 +388,7 @@ static void handle_tx(int kind, int idx, const uint8_t *b, size_t n) {
     R.tx_refused++;      /* no STATUS: a per-frame refusal would be spam */
     return;
   }
+  if (R.sw.active) { R.tx_scan_drop++; return; }   /* radio is off-channel */
   tx_inject(&t);
 }
 
@@ -340,6 +441,8 @@ static void handle_msg(int kind, int idx, const uint8_t *b, size_t n) {
     handle_tune(kind, idx, &t);
   } else if (type == MR_TX) {
     handle_tx(kind, idx, b, n);
+  } else if (type == MR_SCAN) {
+    handle_scan(kind, idx, b, n);
   } else {
     R.bad_msg++;          /* FRAME/STATUS from a client */
   }
@@ -353,7 +456,7 @@ static void udp_drain(void) {
     if (n < 0) return;
     uint8_t type;
     if (mr_parse_header(b, (size_t)n, &type) != MR_OK ||
-        (type != MR_HELLO && type != MR_TUNE && type != MR_TX)) {
+        (type != MR_HELLO && type != MR_TUNE && type != MR_TX && type != MR_SCAN)) {
       R.bad_msg++; continue;
     }
     int i = udp_find(&a, type != MR_TX);
@@ -377,6 +480,7 @@ static void reap_udp(void) {
     if (R.udp[i].used && t - R.udp[i].last_hello_ms > HELLO_TIMEOUT_MS) {
       syslog(LOG_INFO, "udp #%d lapsed", i);
       R.udp[i].used = 0;
+      if (R.sw.active && R.sw_kind == 1 && R.sw_idx == i) R.sw_kind = 0;   /* slot may be reused */
     }
 }
 
@@ -386,6 +490,7 @@ static void ws_close(int i) {
   if (!R.ws[i].used) return;
   close(R.ws[i].fd);
   R.ws[i].used = 0;
+  if (R.sw.active && R.sw_kind == 2 && R.sw_idx == i) R.sw_kind = 0;   /* slot may be reused */
   syslog(LOG_INFO, "ws #%d closed", i);
 }
 
@@ -727,6 +832,10 @@ int relay_run(const struct relay_cfg *cfg) {
   if (R.ws_fd < 0) { syslog(LOG_ERR, "ws socket setup failed: %s", strerror(errno)); return 1; }
   syslog(LOG_INFO, "up: %s on %u %s, udp %u ws %u", cfg->mon, (unsigned)R.tn.channel,
          tune_sec_str(R.tn.sec), cfg->udp_port, cfg->ws_port);
+  const struct radio_ops *ro = radio_open(cfg->mon);
+  if (ro) { R.ops = *ro; R.ops.foreign = relay_foreign; R.have_radio = 1; }
+  else syslog(LOG_WARNING, "no radio backend: SCAN/SURVEY disabled");
+  survey_rebase();
 
   uint64_t last_log = now_ms();
   for (;;) {
@@ -737,7 +846,13 @@ int relay_run(const struct relay_cfg *cfg) {
     p[n++] = (struct pollfd){R.sig_rd, POLLIN, 0};
     int ws_first = n;
     n += ws_poll_fill(p + n);
-    if (poll(p, (nfds_t)n, 100) < 0 && errno != EINTR) return 1;
+    int timeout = SURVEY_MS;
+    if (R.sw.active) {
+      uint64_t t = now_ms();
+      int left = R.sw.deadline_ms > t ? (int)(R.sw.deadline_ms - t) : 0;
+      if (left < timeout) timeout = left;
+    }
+    if (poll(p, (nfds_t)n, timeout) < 0 && errno != EINTR) return 1;
     /* Client sockets BEFORE rx_drain: a TX read here is injected now, not
      * after up to RX_BATCH forwarded frames. */
     if (p[1].revents & POLLIN) udp_drain();
@@ -748,11 +863,16 @@ int relay_run(const struct relay_cfg *cfg) {
      * finish_tune() is about to set. */
     if ((p[0].revents & POLLIN) && rx_drain() < 0) return 1;
     if (p[0].revents & (POLLERR | POLLHUP)) { syslog(LOG_ERR, "rx socket error"); return 1; }
+    if (R.sw.active && now_ms() >= R.sw.deadline_ms) {
+      sweep_step(&R.sw, &R.ops);
+      if (!R.sw.active) finish_sweep();
+    }
     if (p[2].revents & POLLIN) reap_child();
     check_watchdog();
     reap_udp();
     reap_ws();
     update_owner();
+    survey_tick();
     if (now_ms() - last_log >= 1000) {
       last_log = now_ms();
       if (!cfg->rx_unix) {
@@ -765,9 +885,9 @@ int relay_run(const struct relay_cfg *cfg) {
       }
       if (cfg->verbose)
         syslog(LOG_DEBUG, "rx %u fwd %u foreign %u badfcs %u malformed %u badmsg %u refused %u rxdrop %u "
-               "tx %u txfail %u txrefused %u txecho %u",
+               "tx %u txfail %u txrefused %u txecho %u txscandrop %u",
                R.rx, R.fwd, R.foreign, R.bad_fcs, R.malformed, R.bad_msg, R.refused, R.rxdrop,
-               R.tx, R.tx_fail, R.tx_refused, R.tx_echo);
+               R.tx, R.tx_fail, R.tx_refused, R.tx_echo, R.tx_scan_drop);
     }
   }
 }
