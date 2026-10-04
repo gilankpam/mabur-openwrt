@@ -12,7 +12,7 @@ define Package/mabur-relay
   CATEGORY:=Network
   SUBMENU:=Wireless
   TITLE:=mabur RX relay (CPE510 as a remote mabur card)
-  DEPENDS:=+iw
+  DEPENDS:=+iw +libnl-tiny
 endef
 
 define Package/mabur-relay/description
@@ -31,7 +31,11 @@ define Build/Prepare
 	$(CP) ./src/*.c ./src/*.h ./src/Makefile $(PKG_BUILD_DIR)/
 endef
 
-MAKE_FLAGS += mabur-relay
+# -D_GNU_SOURCE: libnl-tiny's handlers.h/msg.h use struct ucred, which musl's
+# sys/socket.h only declares under _GNU_SOURCE (iw's own build sets the same
+# define for the same reason).
+TARGET_CFLAGS += -I$(STAGING_DIR)/usr/include/libnl-tiny -D_GNU_SOURCE
+MAKE_FLAGS += mabur-relay RADIO=nl LDLIBS=-lnl-tiny
 
 define Package/mabur-relay/install
 	$(INSTALL_DIR) $(1)/usr/sbin $(1)/usr/libexec $(1)/etc/init.d $(1)/etc
