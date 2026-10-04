@@ -68,6 +68,7 @@ static struct {
   struct owner owner;
   uint32_t seq, rx, fwd, foreign, bad_fcs, malformed, bad_msg, refused, rxdrop;
   uint32_t tx, tx_fail, tx_refused, tx_echo;
+  uint32_t tx_scan_drop;   /* owner TX dropped because a sweep is running (always 0 until Task 4) */
   uint64_t start_ms;
 } R;
 
@@ -106,6 +107,7 @@ static void fill_status(struct mr_status *s, int kind, int idx) {
   s->rx = R.rx; s->fwd = R.fwd; s->foreign = R.foreign; s->bad_fcs = R.bad_fcs;
   s->uptime_s = (uint32_t)((now_ms() - R.start_ms) / 1000);
   s->tx = R.tx; s->tx_fail = R.tx_fail; s->tx_refused = R.tx_refused;
+  s->tx_scan_drop = R.tx_scan_drop;
 }
 
 static void udp_send_status(int idx, const struct mr_status *s) {

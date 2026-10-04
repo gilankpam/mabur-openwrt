@@ -4,13 +4,21 @@
 #include <stdint.h>
 
 #define MR_MAGIC 0x524D
-#define MR_VER 3
-enum { MR_FRAME = 1, MR_HELLO = 2, MR_TUNE = 3, MR_STATUS = 4, MR_TX = 5 };
+#define MR_VER 4
+enum { MR_FRAME = 1, MR_HELLO = 2, MR_TUNE = 3, MR_STATUS = 4, MR_TX = 5,
+       MR_SURVEY = 6, MR_SCAN = 7, MR_SCAN_RESULT = 8 };
 #define MR_HDR_LEN 4
 #define MR_FRAME_HDR_LEN 20
 #define MR_FLAGS_OFFSET 10
 #define MR_TUNE_LEN 8
-#define MR_STATUS_LEN 47
+#define MR_STATUS_LEN 51
+#define MR_SURVEY_LEN 32
+#define MR_SCAN_HDR_LEN 9
+#define MR_SCAN_MAX_CH 32
+#define MR_SCAN_RESULT_HDR_LEN 10
+#define MR_SCAN_ENTRY_LEN 13
+#define MR_SCAN_MAX_ENTRIES 128
+enum { MR_SCAN_OK = 0, MR_SCAN_NOT_OWNER = 1, MR_SCAN_BUSY = 2, MR_SCAN_NO_RETURN = 3, MR_SCAN_INVALID = 4 };
 #define MR_TX_HDR_LEN 6
 #define MR_TX_DOT11_MIN 24
 #define MR_TX_DOT11_MAX 1500
@@ -32,20 +40,34 @@ enum { MR_OK = 0, MR_ESHORT = -1, MR_EMAGIC = -2, MR_EVER = -3, MR_ETYPE = -4, M
 struct mr_tune { uint16_t tune_id; uint8_t channel; uint8_t sec; };
 struct mr_status { uint16_t tune_id; uint8_t state, channel, sec, owner, you_own;
                    uint32_t rx, fwd, foreign, bad_fcs, your_drops, uptime_s,
-                            tx, tx_fail, tx_refused; };
+                            tx, tx_fail, tx_refused, tx_scan_drop; };
 struct mr_frame_meta { uint32_t seq; uint8_t rx_channel, sec, flags, mcs;
                        int8_t rssi[2], noise[2]; uint32_t tsf_lo; };
 /* TX body view: d points INTO the parsed buffer (no copy). */
 struct mr_tx { uint8_t mcs, flags; const uint8_t *d; size_t dl; };
+struct mr_survey { uint8_t channel, sec; uint16_t gen;
+                   uint32_t active_ms, busy_ms, rx_ms, tx_ms, ofdm_err, foreign; };
+struct mr_scan { uint16_t scan_id; uint8_t passes, observe_ms, n; uint8_t ch[MR_SCAN_MAX_CH]; };
+struct mr_scan_entry { uint8_t ch, pass, valid;
+                       uint16_t active_ms, busy_ms, rx_ms, foreign, ofdm_err; };
+struct mr_scan_result_hdr { uint16_t scan_id; uint8_t status, back_channel, back_sec, count; };
 size_t mr_pack_frame_hdr(uint8_t *out, const struct mr_frame_meta *m);
 size_t mr_pack_hello(uint8_t *out);
 size_t mr_pack_tune(uint8_t *out, const struct mr_tune *t);
 size_t mr_pack_status(uint8_t *out, const struct mr_status *s);
 size_t mr_pack_tx_hdr(uint8_t *out, uint8_t mcs, uint8_t flags);
+size_t mr_pack_survey(uint8_t *out, const struct mr_survey *s);
+size_t mr_pack_scan(uint8_t *out, const struct mr_scan *s);
+size_t mr_pack_scan_result(uint8_t *out, const struct mr_scan_result_hdr *h,
+                           const struct mr_scan_entry *e);
 int mr_parse_header(const uint8_t *b, size_t n, uint8_t *type);
 int mr_parse_frame_hdr(const uint8_t *b, size_t n, struct mr_frame_meta *m);
 int mr_parse_tune(const uint8_t *b, size_t n, struct mr_tune *t);
 int mr_parse_status(const uint8_t *b, size_t n, struct mr_status *s);
 int mr_parse_tx(const uint8_t *b, size_t n, struct mr_tx *t);
+int mr_parse_survey(const uint8_t *b, size_t n, struct mr_survey *s);
+int mr_parse_scan(const uint8_t *b, size_t n, struct mr_scan *s);
+int mr_parse_scan_result(const uint8_t *b, size_t n, struct mr_scan_result_hdr *h,
+                         struct mr_scan_entry *e);   /* e has room for MR_SCAN_MAX_ENTRIES */
 
 #endif

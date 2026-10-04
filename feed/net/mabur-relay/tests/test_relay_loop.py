@@ -10,7 +10,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 SRC = os.path.join(HERE, '..', 'src')
 RELAY = os.path.join(SRC, 'mabur-relay')
 
-FRAME, HELLO, TUNE, STATUS, TX = 1, 2, 3, 4, 5
+FRAME, HELLO, TUNE, STATUS, TX, SURVEY, SCAN, SCAN_RESULT = 1, 2, 3, 4, 5, 6, 7, 8
 
 def load_fixtures():
     d = open(os.path.join(HERE, 'fixtures', 'frames.pcap'), 'rb').read()
@@ -22,7 +22,7 @@ def load_fixtures():
 
 FX = load_fixtures()          # 0 qos, 1 probe, 2 foreign, 3 bad-fcs
 
-def hdr(t): return struct.pack('<HBB', 0x524D, 3, t)
+def hdr(t): return struct.pack('<HBB', 0x524D, 4, t)
 def hello(): return hdr(HELLO)
 def tune(tid, ch, sec): return hdr(TUNE) + struct.pack('<HBB', tid, ch, sec)
 
@@ -38,17 +38,30 @@ def dot11(f): return f[rt_len(f):-4]      # fixtures carry radiotap FCS flag 0x1
 
 def parse(msg):
     magic, ver, t = struct.unpack('<HBB', msg[:4])
-    assert magic == 0x524D and ver == 3, msg[:4]
+    assert magic == 0x524D and ver == 4, msg[:4]
     if t == FRAME:
         seq, ch, sec, fl, mcs, r0, r1, n0, n1, tsf = struct.unpack('<IBBBBbbbbI', msg[4:20])
         return ('F', dict(seq=seq, ch=ch, sec=sec, flags=fl, mcs=mcs,
                            rssi=(r0, r1), noise=(n0, n1), tsf=tsf, body=msg[20:]))
     if t == STATUS:
-        f = struct.unpack('<HBBBBBIIIIIIIII', msg[4:47])
+        f = struct.unpack('<HBBBBBIIIIIIIIII', msg[4:51])
         keys = ['tune_id', 'state', 'ch', 'sec', 'owner', 'you_own',
                 'rx', 'fwd', 'foreign', 'bad_fcs', 'your_drops', 'uptime_s',
-                'tx', 'tx_fail', 'tx_refused']
+                'tx', 'tx_fail', 'tx_refused', 'tx_scan_drop']
         return ('S', dict(zip(keys, f)))
+    if t == SURVEY:
+        ch, sec, gen, act, busy, rx, txm, err, foreign = struct.unpack('<BBHIIIIII', msg[4:32])
+        return ('V', dict(ch=ch, sec=sec, gen=gen, active=act, busy=busy, rx=rx,
+                          tx=txm, err=err, foreign=foreign))
+    if t == SCAN_RESULT:
+        sid, status, bch, bsec, cnt = struct.unpack('<HBBBB', msg[4:10])
+        ents = []
+        for i in range(cnt):
+            o = 10 + 13 * i
+            ch, ps, valid, act, busy, rx, foreign, err = struct.unpack('<BBBHHHHH', msg[o:o + 13])
+            ents.append(dict(ch=ch, pass_=ps, valid=valid, active=act, busy=busy, rx=rx,
+                             foreign=foreign, err=err))
+        return ('R', dict(scan_id=sid, status=status, back_ch=bch, back_sec=bsec, entries=ents))
     return ('?', t)
 
 def free_port(kind):
