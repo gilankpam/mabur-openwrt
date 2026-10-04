@@ -665,6 +665,28 @@ class SweepTests(RelayTestBase):
         self.assertEqual((r[0]['scan_id'], r[0]['status']), (12, 0))
         self.assertIsNone(self.r.proc.poll())                # still running
 
+    def test_no_return_reads_back_and_reports_failed(self):
+        open(os.path.join(self.r.dir, 'nl_fail'), 'w').write('136')
+        open(os.path.join(self.r.dir, 'cur'), 'w').write('149 HT40+')   # where readback says the radio is
+        u = self.own()
+        u.send(scan(14, 1, 20, [64]))
+        msgs = u.recv_all(0.3)
+        r = self.results(msgs)
+        self.assertEqual((r[0]['scan_id'], r[0]['status']), (14, 3))
+        st = [m for k, m in msgs if k == 'S']
+        self.assertTrue(st)
+        self.assertEqual((st[-1]['state'], st[-1]['ch'], st[-1]['sec']), (2, 149, 1))
+
+    def test_ws_scan_result_survives_full_queue(self):
+        w = Ws(self.r, rcvbuf=2048)
+        w.send(hello()); time.sleep(0.1); w.recv_all(0.1)
+        w.send(scan(15, 1, 100, [64]))
+        time.sleep(0.02)
+        self.r.inject([FX[0]] * 500)                         # fill the WS queue mid-sweep; w not reading
+        time.sleep(0.3)
+        r = self.results(w.recv_all(0.5))
+        self.assertEqual([(x['scan_id'], x['status']) for x in r], [(15, 0)])
+
     def test_frames_mid_sweep_stamped_with_swept_channel(self):
         u = self.own()
         u.send(scan(13, 4, 100, [64]))

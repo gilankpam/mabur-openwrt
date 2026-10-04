@@ -246,8 +246,9 @@ static void survey_rebase(void) {
   R.sv_foreign_base = R.foreign;
 }
 
-static void ws_send_msg(int i, const uint8_t *b, size_t n) {
-  if (ws_enqueue(i, b, n, NULL, 0, 0) == 0) ws_flush(i);
+/* prio: evict a queued frame when full (STATUS / SCAN_RESULT); SURVEY is not prio. */
+static void ws_send_msg(int i, const uint8_t *b, size_t n, int prio) {
+  if (ws_enqueue(i, b, n, NULL, 0, prio) == 0) ws_flush(i);
 }
 
 static void survey_tick(void) {
@@ -267,7 +268,7 @@ static void survey_tick(void) {
     if (R.udp[i].used)
       sendto(R.udp_fd, b, sizeof b, MSG_DONTWAIT, (struct sockaddr *)&R.udp[i].addr, sizeof R.udp[i].addr);
   for (int i = 0; i < MAX_WS; i++)
-    if (R.ws[i].used && R.ws[i].upgraded) ws_send_msg(i, b, sizeof b);
+    if (R.ws[i].used && R.ws[i].upgraded) ws_send_msg(i, b, sizeof b, 0);
 }
 
 static void send_scan_result(int kind, int idx, const struct mr_scan_result_hdr *h,
@@ -279,7 +280,7 @@ static void send_scan_result(int kind, int idx, const struct mr_scan_result_hdr 
     sendto(R.udp_fd, b, n, MSG_DONTWAIT, (struct sockaddr *)&R.udp[idx].addr, sizeof R.udp[idx].addr);
   } else if (kind == 2) {
     if (idx < 0 || idx >= MAX_WS || !R.ws[idx].used || !R.ws[idx].upgraded) return;
-    ws_send_msg(idx, b, n);
+    ws_send_msg(idx, b, n, 1);   /* a lost result = GS timeout + wasted sweep */
   }
 }
 
@@ -302,11 +303,19 @@ static void handle_scan(int kind, int idx, const uint8_t *b, size_t n) {
 }
 
 static void finish_sweep(void) {
+  if (R.sw.status != MR_SCAN_OK) {
+    /* Could not return: report where the radio really is, as a failed tune,
+     * so the GS sees it mistuned and re-TUNEs. */
+    uint8_t ch, sec;
+    if (tune_readback(R.cfg->mon, &ch, &sec) == 0) { R.tn.channel = ch; R.tn.sec = sec; }
+    R.tn.state = 2;
+  }
   struct mr_scan_result_hdr h = {R.sw.req.scan_id, R.sw.status, R.tn.channel, R.tn.sec, (uint8_t)R.sw.count};
   send_scan_result(R.sw_kind, R.sw_idx, &h, R.sw.out);
   syslog(R.sw.status == MR_SCAN_OK ? LOG_INFO : LOG_WARNING,
          "sweep id=%u done in %u ms (max retune %u ms)%s", R.sw.req.scan_id, R.sw.total_ms,
          R.sw.max_retune_ms, R.sw.status == MR_SCAN_OK ? "" : ", could NOT return");
+  if (R.sw.status != MR_SCAN_OK) broadcast_status();
   survey_rebase();
   if (R.tn.have_pending) { R.tn.have_pending = 0; start_tune(R.tn.pending); }
 }
