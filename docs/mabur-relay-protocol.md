@@ -119,11 +119,16 @@ injected frames back to the monitor vif (radiotap `TX_FLAGS`); the relay
 drops these and counts `txecho` — they never reach clients.
 
 **SURVEY.** Sent to every subscriber every 50 ms while at least one
-subscriber exists (no SURVEY traffic with zero subscribers). `channel`/`sec`
-are the current tuning. `gen` is bumped on every retune and every `SCAN`
-(sweep); the four `_ms` counters and `ofdm_err`/`foreign` are cumulative
-*since `gen` began* — the baseline is taken right after the tune completes,
-so the brief tune-artifact spike in `busy_ms` is excluded. A client must only
+subscriber exists (no SURVEY traffic with zero subscribers), the relay has a
+radio backend, and neither a retune nor a sweep is running — **SURVEY is
+paused for a sweep's whole duration** (and while a `TUNE`'s `iw` child
+runs). `channel`/`sec` are the current tuning. `gen` is bumped only when
+the relay rebases its survey baseline: at startup, after every retune
+completes (`finish_tune`) and when a sweep returns (`finish_sweep`) —
+**not** at sweep start, and not on a refused `SCAN`. The four `_ms`
+counters and `ofdm_err`/`foreign` are cumulative *since `gen` began* — the
+baseline is taken right after the tune completes, so the brief
+tune-artifact spike in `busy_ms` is excluded. A client must only
 delta two SURVEYs sharing the same `gen`; a `gen` change invalidates the
 window (do not subtract across it). `ofdm_err` is the relay's cumulative
 OFDM/HT PHY error count; `foreign` is cumulative non-mabur frames seen,
@@ -132,7 +137,9 @@ distinct from `STATUS.foreign` (counted at the FRAME layer, lifetime).
 **SCAN.** Only the tune owner may send one; a non-owner's `SCAN` gets
 `SCAN_RESULT.status = 1` and is otherwise ignored (no radio ownership
 change). `passes` (1–4) and `observe_ms` (5–100) and `n` (1–32) outside
-range → `status = 4`, radio untouched. On a valid request the relay tunes
+range → `status = 4`, radio untouched; a relay with **no radio backend**
+(nl80211 open failed at startup — it logs "no radio backend: SCAN/SURVEY
+disabled") also answers every owner `SCAN` with `status = 4`. On a valid request the relay tunes
 to each of the `n` channels at HT20 in turn, `passes` times back to back
 (pass 1 over every channel, then pass 2, …), spending `observe_ms` on each
 before reading the survey/PHY-error delta, then returns to the tuning it
@@ -141,8 +148,14 @@ had when the `SCAN` arrived.
 **SCAN_RESULT.** Goes only to the requester, never broadcast. `status`: 0 ok,
 1 not owner, 2 busy (a retune or another sweep was already in progress),
 3 could not retune back to the pre-sweep channel, 4 invalid request (bad
-`passes`/`observe_ms`/`n`, or `n` with no matching channels). Status 1/2/4
-carry `count = 0` — the sweep never ran. Each entry's `valid` is 0 when that
+`passes`/`observe_ms`/`n`) or no radio backend. Status 1/2/4
+carry `count = 0` — the sweep never ran. On status 3 the relay reads the
+radio back, **adopts** that channel/`sec` as its current tuning, sets
+`STATUS state = 2` and broadcasts a `STATUS` (so the owner sees itself
+mistuned and re-`TUNE`s); the `SCAN_RESULT`'s `back_channel`/`back_sec`
+report that readback. A `SCAN_RESULT` to a WebSocket client is sent
+**priority**: when that client's send queue is full it evicts a queued
+`FRAME` rather than being dropped (`SURVEY` is not priority). Each entry's `valid` is 0 when that
 channel's tune during the sweep failed (the other fields are then
 meaningless, not zeroed).
 
@@ -222,14 +235,15 @@ the CPE where the link was).
   queue as mid-retune, step 6 above) and runs once the sweep returns to the
   op channel. A second `SCAN` arriving mid-sweep is refused with
   `SCAN_RESULT.status = 2`; it does not interrupt the running sweep.
-- `SURVEY` keeps being sent during a sweep, stamped with whatever channel
-  the sweep is on at that instant. Its `gen` is bumped once at sweep start
-  and again on return to the op channel, so no client-visible delta window
-  ever straddles a sweep.
+- `SURVEY` is **paused** for the sweep's whole duration (no `SURVEY` is
+  sent while it runs). On return the relay rebases its survey baseline and
+  bumps `gen` once, so the first `SURVEY` after a sweep carries a new `gen`
+  and no client-visible delta window straddles the sweep.
 - The `SCAN_RESULT` is delivered only to the subscriber that sent the
-  `SCAN`; if that subscriber is gone (reaped, or its UDP/WS slot replaced)
-  by the time the sweep finishes, the result is simply dropped — nobody is
-  waiting for it.
+  `SCAN`. The relay forgets the requester if that subscriber is reaped (UDP:
+  2 s without a `HELLO`) or its WS socket closes mid-sweep — the slot may be
+  reused — and the finished sweep's result is then simply dropped: nobody is
+  waiting for it, and a new client in the same slot never receives it.
 
 ## Client obligations
 
