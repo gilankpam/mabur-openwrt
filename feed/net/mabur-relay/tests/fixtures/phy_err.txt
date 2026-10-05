@@ -1,0 +1,10 @@
+          UNDERRUN ERR :          0
+            TIMING ERR :          0
+           SERVICE ERR :          4
+       OFDM-TIMING ERR :          2
+OFDM-SIGNAL-PARITY ERR :          1
+      OFDM-RESTART ERR :        149
+       CCK-TIMING ERR :          9
+            HT-CRC ERR :          5
+         HT-LENGTH ERR :          3
+          SPECTRAL ERR :          0

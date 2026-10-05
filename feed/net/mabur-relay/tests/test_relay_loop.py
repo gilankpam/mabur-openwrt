@@ -10,7 +10,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 SRC = os.path.join(HERE, '..', 'src')
 RELAY = os.path.join(SRC, 'mabur-relay')
 
-FRAME, HELLO, TUNE, STATUS, TX = 1, 2, 3, 4, 5
+FRAME, HELLO, TUNE, STATUS, TX, SURVEY, SCAN, SCAN_RESULT = 1, 2, 3, 4, 5, 6, 7, 8
 
 def load_fixtures():
     d = open(os.path.join(HERE, 'fixtures', 'frames.pcap'), 'rb').read()
@@ -22,9 +22,11 @@ def load_fixtures():
 
 FX = load_fixtures()          # 0 qos, 1 probe, 2 foreign, 3 bad-fcs
 
-def hdr(t): return struct.pack('<HBB', 0x524D, 3, t)
+def hdr(t): return struct.pack('<HBB', 0x524D, 4, t)
 def hello(): return hdr(HELLO)
 def tune(tid, ch, sec): return hdr(TUNE) + struct.pack('<HBB', tid, ch, sec)
+def scan(sid, passes, observe, chans):
+    return hdr(SCAN) + struct.pack('<HBBB', sid, passes, observe, len(chans)) + bytes(chans)
 
 TXRT_RCF = bytes([0x00, 0x00, 0x0D, 0x00, 0x00, 0x80, 0x08, 0x00, 0x08, 0x00, 0x37, 0x30, 0x00])
 RCF_DOT11 = bytes([0x40, 0, 0, 0]) + b'\xff' * 6 + bytes([0x57, 0x42, 0x75, 0x05, 0xd6, 0x00]) * 2 + b'\x10\x00' + b'RCFBODY'
@@ -38,17 +40,30 @@ def dot11(f): return f[rt_len(f):-4]      # fixtures carry radiotap FCS flag 0x1
 
 def parse(msg):
     magic, ver, t = struct.unpack('<HBB', msg[:4])
-    assert magic == 0x524D and ver == 3, msg[:4]
+    assert magic == 0x524D and ver == 4, msg[:4]
     if t == FRAME:
         seq, ch, sec, fl, mcs, r0, r1, n0, n1, tsf = struct.unpack('<IBBBBbbbbI', msg[4:20])
         return ('F', dict(seq=seq, ch=ch, sec=sec, flags=fl, mcs=mcs,
                            rssi=(r0, r1), noise=(n0, n1), tsf=tsf, body=msg[20:]))
     if t == STATUS:
-        f = struct.unpack('<HBBBBBIIIIIIIII', msg[4:47])
+        f = struct.unpack('<HBBBBBIIIIIIIIII', msg[4:51])
         keys = ['tune_id', 'state', 'ch', 'sec', 'owner', 'you_own',
                 'rx', 'fwd', 'foreign', 'bad_fcs', 'your_drops', 'uptime_s',
-                'tx', 'tx_fail', 'tx_refused']
+                'tx', 'tx_fail', 'tx_refused', 'tx_scan_drop']
         return ('S', dict(zip(keys, f)))
+    if t == SURVEY:
+        ch, sec, gen, act, busy, rx, txm, err, foreign = struct.unpack('<BBHIIIIII', msg[4:32])
+        return ('V', dict(ch=ch, sec=sec, gen=gen, active=act, busy=busy, rx=rx,
+                          tx=txm, err=err, foreign=foreign))
+    if t == SCAN_RESULT:
+        sid, status, bch, bsec, cnt = struct.unpack('<HBBBB', msg[4:10])
+        ents = []
+        for i in range(cnt):
+            o = 10 + 13 * i
+            ch, ps, valid, act, busy, rx, foreign, err = struct.unpack('<BBBHHHHH', msg[o:o + 13])
+            ents.append(dict(ch=ch, pass_=ps, valid=valid, active=act, busy=busy, rx=rx,
+                             foreign=foreign, err=err))
+        return ('R', dict(scan_id=sid, status=status, back_ch=bch, back_sec=bsec, entries=ents))
     return ('?', t)
 
 def free_port(kind):
@@ -112,9 +127,15 @@ class Udp:
         self.s.bind(('127.0.0.1', 0)); self.addr = ('127.0.0.1', relay.udp_port)
     def send(self, b): self.s.sendto(b, self.addr)
     def recv_all(self, quiet=0.3):
-        out = []; self.s.settimeout(quiet)
+        """Drain until `quiet` s pass with no message other than the 50 ms
+        SURVEY feed (which would otherwise never let the socket go quiet)."""
+        out = []; end = time.time() + quiet
         try:
-            while True: out.append(parse(self.s.recv(65536)))
+            while True:
+                self.s.settimeout(max(end - time.time(), 0.001))
+                m = parse(self.s.recv(65536)); out.append(m)
+                if m[0] != 'V': end = time.time() + quiet
+                elif time.time() >= end: break
         except socket.timeout: pass
         return out
     def frames(self, msgs): return [m for k, m in msgs if k == 'F']
@@ -388,11 +409,16 @@ class Ws:
             self.buf += d
 
     def recv_all(self, quiet=0.3):
-        out = []; self.s.settimeout(quiet)
+        """Same quiet rule as Udp.recv_all: SURVEYs do not extend the drain."""
+        out = []; end = time.time() + quiet
         try:
             while True:
+                self.s.settimeout(max(end - time.time(), 0.001))
                 op, p = self._one()
-                if op == 2: out.append(parse(p))
+                if op != 2: continue
+                m = parse(p); out.append(m)
+                if m[0] != 'V': end = time.time() + quiet
+                elif time.time() >= end: break
         except (socket.timeout, EOFError): pass
         return out
 
@@ -406,6 +432,7 @@ class Ws:
                 if not d: return True
         except socket.timeout: return False
         except ConnectionResetError: return True
+    def close(self): self.s.close()
 
 class WsTests(RelayTestBase):
     def test_ws_gets_same_frames_as_udp(self):
@@ -534,6 +561,138 @@ class TxTests(RelayTestBase):
         self.r.inject(FX * 50)
         u.send(tx(0, 0x03, RCF_DOT11))
         self.assertEqual(len(self.r.injected()), 1)
+
+class SweepTests(RelayTestBase):
+    def own(self):
+        u = Udp(self.r); u.send(hello()); time.sleep(0.1); u.recv_all(0.1); return u
+
+    def surveys(self, msgs): return [m for k, m in msgs if k == 'V']
+    def results(self, msgs): return [m for k, m in msgs if k == 'R']
+
+    def test_survey_every_50ms_with_gen(self):
+        u = self.own()
+        u.send(hello())
+        sv = self.surveys(u.recv_all(0.6))
+        self.assertGreaterEqual(len(sv), 6)                 # ~12 in 0.6 s at 50 ms
+        self.assertEqual((sv[-1]['ch'], sv[-1]['sec']), (136, 2))
+        self.assertEqual(len({s['gen'] for s in sv}), 1)
+        self.assertGreater(sv[-1]['active'], sv[0]['active'])
+
+    def test_no_survey_without_subscribers(self):
+        u = Udp(self.r)                                      # never says HELLO
+        self.assertEqual(self.surveys(u.recv_all(0.3)), [])
+
+    def test_scan_result_two_passes_and_return(self):
+        open(os.path.join(self.r.dir, 'busy_64'), 'w').write('50')
+        u = self.own()
+        pre = self.surveys(u.recv_all(0.15))                 # pre-sweep generation
+        u.send(scan(9, 2, 20, [64, 144]))
+        msgs = u.recv_all(0.8)
+        res = self.results(msgs)
+        self.assertEqual(len(res), 1)
+        r = res[0]
+        self.assertEqual((r['scan_id'], r['status'], r['back_ch'], r['back_sec']), (9, 0, 136, 2))
+        self.assertEqual([(e['ch'], e['pass_']) for e in r['entries']],
+                         [(64, 0), (144, 0), (64, 1), (144, 1)])
+        self.assertTrue(all(e['valid'] for e in r['entries']))
+        e64 = r['entries'][0]
+        self.assertGreaterEqual(e64['active'], 18)
+        self.assertAlmostEqual(e64['busy'] / e64['active'], 0.5, delta=0.1)
+        nl = [c for c in self.r.calls() if c.startswith('nl ')]
+        self.assertEqual(nl, ['nl 64 HT20', 'nl 144 HT20', 'nl 64 HT20', 'nl 144 HT20', 'nl 136 HT40-'])
+        gens = [s['gen'] for s in pre + self.surveys(msgs)]
+        self.assertGreater(gens[-1], gens[0])                # gen bumped on return
+
+    def test_scan_from_non_owner_refused(self):
+        a = self.own(); b = Udp(self.r); b.send(hello()); time.sleep(0.1); b.recv_all(0.1)
+        b.send(scan(3, 1, 20, [64]))
+        r = self.results(b.recv_all(0.3))
+        self.assertEqual((r[0]['scan_id'], r[0]['status'], len(r[0]['entries'])), (3, 1, 0))
+
+    def test_invalid_scan_rejected(self):
+        u = self.own()
+        u.send(scan(4, 9, 20, [64]))                         # passes 9 > 4
+        r = self.results(u.recv_all(0.3))
+        self.assertEqual((r[0]['scan_id'], r[0]['status']), (4, 4))
+
+    def test_second_scan_mid_sweep_is_busy(self):
+        u = self.own()
+        u.send(scan(5, 4, 100, [64, 144]))                   # ~0.9 s sweep
+        time.sleep(0.05); u.send(scan(6, 1, 20, [64]))
+        res = {r['scan_id']: r for r in self.results(u.recv_all(1.5))}
+        self.assertEqual(res[6]['status'], 2)
+        self.assertEqual(res[5]['status'], 0)
+
+    def test_tune_mid_sweep_runs_after_return(self):
+        u = self.own()
+        u.send(scan(7, 2, 50, [64, 144]))
+        time.sleep(0.05); u.send(tune(77, 149, 0))
+        st = u.statuses(u.recv_all(1.2))
+        self.assertTrue(any(s['tune_id'] == 77 and s['state'] == 0 and s['ch'] == 149 for s in st))
+        calls = self.r.calls()
+        self.assertLess(calls.index('nl 136 HT40-'), calls.index('set 149 HT20'))
+
+    def test_owner_tx_dropped_mid_sweep(self):
+        u = self.own()
+        u.send(scan(8, 2, 100, [64, 144]))
+        time.sleep(0.05)
+        for _ in range(3): u.send(tx(0, 3, RCF_DOT11))
+        time.sleep(0.6); u.send(hello())
+        st = u.statuses(u.recv_all(0.5))
+        self.assertEqual(st[-1]['tx_scan_drop'], 3)
+        self.assertEqual(self.r.injected(0.1), [])
+
+    def test_hello_answered_during_sweep(self):              # Review Focus 2
+        u = self.own()
+        u.send(scan(10, 4, 100, [64, 144]))                  # ~0.9 s
+        time.sleep(0.2); u.send(hello())
+        msgs = u.recv_all(0.15)
+        self.assertTrue(u.statuses(msgs))                    # STATUS came back mid-sweep
+
+    def test_scan_requester_gone_mid_sweep(self):            # Review Focus 1
+        w = Ws(self.r)
+        w.send(hello()); time.sleep(0.1)
+        w.send(scan(11, 4, 100, [64, 144]))
+        time.sleep(0.1); w.close()
+        time.sleep(0.1)
+        w2 = Ws(self.r); w2.send(hello())                    # reuses the requester's slot mid-sweep
+        got = w2.recv_all(1.0)
+        self.assertTrue(w2.statuses(got))
+        self.assertEqual([m['scan_id'] for k, m in got if k == 'R'], [])   # not the dead requester's result
+        u = self.own()
+        u.send(scan(12, 1, 20, [64]))
+        r = self.results(u.recv_all(0.4))
+        self.assertEqual((r[0]['scan_id'], r[0]['status']), (12, 0))
+        self.assertIsNone(self.r.proc.poll())                # still running
+
+    def test_no_return_reads_back_and_reports_failed(self):
+        open(os.path.join(self.r.dir, 'nl_fail'), 'w').write('136')
+        open(os.path.join(self.r.dir, 'cur'), 'w').write('149 HT40+')   # where readback says the radio is
+        u = self.own()
+        u.send(scan(14, 1, 20, [64]))
+        msgs = u.recv_all(0.3)
+        r = self.results(msgs)
+        self.assertEqual((r[0]['scan_id'], r[0]['status']), (14, 3))
+        st = [m for k, m in msgs if k == 'S']
+        self.assertTrue(st)
+        self.assertEqual((st[-1]['state'], st[-1]['ch'], st[-1]['sec']), (2, 149, 1))
+
+    def test_ws_scan_result_survives_full_queue(self):
+        w = Ws(self.r, rcvbuf=2048)
+        w.send(hello()); time.sleep(0.1); w.recv_all(0.1)
+        w.send(scan(15, 1, 100, [64]))
+        time.sleep(0.02)
+        self.r.inject([FX[0]] * 500)                         # fill the WS queue mid-sweep; w not reading
+        time.sleep(0.3)
+        r = self.results(w.recv_all(0.5))
+        self.assertEqual([(x['scan_id'], x['status']) for x in r], [(15, 0)])
+
+    def test_frames_mid_sweep_stamped_with_swept_channel(self):
+        u = self.own()
+        u.send(scan(13, 4, 100, [64]))
+        time.sleep(0.1); self.r.inject([FX[0]] * 3)
+        fr = u.frames(u.recv_all(0.3))
+        self.assertTrue(fr and all(f['ch'] == 64 and f['sec'] == 0 for f in fr))
 
 if __name__ == '__main__':
     unittest.main(verbosity=2)
